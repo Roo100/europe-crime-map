@@ -1,0 +1,353 @@
+
+<style>
+  .ctrl-bar { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; align-items:center; }
+  .ctrl-btn { padding:5px 12px; font-size:12px; border:0.5px solid var(--color-border-secondary); border-radius:var(--border-radius-md); background:var(--color-background-primary); color:var(--color-text-primary); cursor:pointer; transition:background .15s; }
+  .ctrl-btn.active { background:var(--color-text-primary); color:var(--color-background-primary); }
+  .ctrl-btn:hover:not(.active) { background:var(--color-background-secondary); }
+  .legend { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; font-size:11px; color:var(--color-text-secondary); align-items:center; }
+  .legend-swatch { width:12px; height:12px; border-radius:2px; display:inline-block; }
+  .tooltip { position:absolute; background:var(--color-background-primary); border:0.5px solid var(--color-border-secondary); border-radius:var(--border-radius-md); padding:8px 12px; font-size:12px; pointer-events:none; display:none; z-index:10; min-width:160px; color:var(--color-text-primary); }
+  .tt-country { font-size:13px; font-weight:500; margin-bottom:4px; }
+  .tt-row { display:flex; justify-content:space-between; gap:16px; color:var(--color-text-secondary); }
+  .tt-val { color:var(--color-text-primary); font-weight:500; }
+  #map-wrap { position:relative; width:100%; }
+  svg text { font-family: var(--font-sans); }
+</style>
+
+<h2 class="sr-only">Interactive map of crime statistics for Germany, France, Italy, Greece, Norway, Lithuania, and Romania (2008–2023)</h2>
+
+<div class="ctrl-bar">
+  <span style="font-size:11px;color:var(--color-text-secondary);margin-right:4px;">Crime</span>
+  <button class="ctrl-btn active" onclick="setCategory('Homicide',this)">Homicide</button>
+  <button class="ctrl-btn" onclick="setCategory('Sexual Assault',this)">Sexual assault</button>
+  <button class="ctrl-btn" onclick="setCategory('Theft',this)">Theft</button>
+  <span style="font-size:11px;color:var(--color-text-secondary);margin-left:8px;margin-right:4px;">Measure</span>
+  <button class="ctrl-btn active" id="btn-raw" onclick="setMeasure('raw',this)">Raw count</button>
+  <button class="ctrl-btn" id="btn-rate" onclick="setMeasure('rate',this)">Rate per 100k</button>
+  <span style="font-size:11px;color:var(--color-text-secondary);margin-left:8px;margin-right:4px;">Map type</span>
+  <button class="ctrl-btn active" id="btn-choro" onclick="setMapType('choropleth',this)">Choropleth</button>
+  <button class="ctrl-btn" id="btn-bubble" onclick="setMapType('bubble',this)">Bubble</button>
+</div>
+
+<div style="font-size:11px;color:var(--color-text-secondary);margin-bottom:6px;">
+  Year: <strong id="yr-label">2023</strong>
+  <input type="range" min="0" max="15" value="15" step="1" id="yr-slider" style="width:180px;margin-left:8px;vertical-align:middle;">
+</div>
+
+<div id="map-wrap">
+  <div class="tooltip" id="tooltip"></div>
+  <svg id="map-svg" viewBox="0 0 680 420" width="100%" style="display:block;"></svg>
+</div>
+
+<div class="legend" id="legend"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<script>
+const YEARS = [2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022,2023];
+
+const DATA = {
+  Homicide: {
+    raw: {
+      Germany:  [656,721,699,689,619,623,645,655,747,738,632,586,719,631,614,661],
+      France:   [975,804,797,874,814,802,765,880,779,710,696,753,692,734,821,887],
+      Italy:    [615,590,529,552,530,506,487,471,404,376,359,317,285,303,322,338],
+      Greece:   [139,143,176,184,165,141,105,86,81,78,94,76,73,89,79,76],
+      Norway:   [34,29,29,111,27,47,29,24,27,28,25,28,31,29,30,40],
+      Lithuania:[286,240,199,189,181,172,155,168,142,113,97,84,99,70,62,69],
+      Romania:  [470,397,404,335,378,336,298,291,247,256,267,255,256,191,177,139],
+    },
+    rate: {
+      Germany:  [0.80,0.88,0.85,0.86,0.77,0.77,0.80,0.81,0.91,0.89,0.76,0.71,0.86,0.76,0.74,0.80],
+      France:   [1.52,1.25,1.23,1.35,1.25,1.22,1.16,1.32,1.17,1.06,1.04,1.12,1.03,1.08,1.21,1.30],
+      Italy:    [1.04,1.00,0.89,0.93,0.89,0.85,0.82,0.79,0.67,0.62,0.59,0.52,0.47,0.51,0.55,0.58],
+      Greece:   [1.26,1.30,1.59,1.67,1.50,1.30,0.98,0.80,0.75,0.73,0.88,0.71,0.68,0.83,0.74,0.72],
+      Norway:   [0.70,0.59,0.59,2.24,0.54,0.93,0.57,0.46,0.51,0.52,0.47,0.52,0.58,0.54,0.55,0.73],
+      Lithuania:[8.49,7.15,5.97,5.70,5.49,5.26,4.78,5.23,4.46,3.57,3.09,2.69,3.18,2.26,2.02,2.26],
+      Romania:  [2.18,1.85,1.89,1.57,1.77,1.58,1.40,1.37,1.17,1.21,1.27,1.22,1.23,0.92,0.86,0.68],
+    }
+  },
+  'Sexual Assault': {
+    raw: {
+      Germany:  [49492,41770,28842,28815,28246,27922,27614,27243,29247,26505,31549,31148,30957,31380,37132,39548],
+      France:   [13754,13411,12855,13465,15898,16607,18802,20464,21124,23420,28581,32351,30826,40319,45235,47967],
+      Italy:    [4837,4706,4588,4594,4532,4426,4201,4063,4227,4412,4664,4717,3782,4108,4655,5073],
+      Greece:   [1046,1156,1127,1188,1082,969,810,760,740,755,808,789,726,798,921,1044],
+      Norway:   [1452,1481,1446,1621,1646,1594,1630,1904,2235,2308,2564,2197,2234,2471,2254,2325],
+      Lithuania:[619,565,606,573,534,561,493,500,538,539,543,531,518,484,448,510],
+      Romania:  [2419,2301,2165,2196,2158,2130,2001,1940,1909,1883,1814,1706,1561,1569,1627,1670],
+    },
+    rate: {
+      Germany:  [60.20,50.94,35.26,35.92,35.16,34.68,34.19,33.55,35.59,32.12,38.11,37.52,37.22,37.74,44.61,47.58],
+      France:   [21.49,20.84,19.88,20.72,24.35,25.32,28.51,30.78,31.70,35.05,42.89,48.16,45.69,59.53,66.43,70.25],
+      Italy:    [8.18,7.96,7.74,7.75,7.62,7.44,7.07,6.85,7.00,7.32,7.69,7.79,6.37,6.95,7.90,8.63],
+      Greece:   [9.49,10.50,10.21,10.79,9.83,8.94,7.57,7.12,6.91,7.06,7.58,7.39,6.82,7.50,8.65,9.90],
+      Norway:   [30.23,30.65,29.85,33.29,33.65,32.31,32.88,37.93,43.90,44.91,49.38,41.87,42.14,45.59,41.37,42.60],
+      Lithuania:[18.39,16.85,18.16,17.25,16.22,17.15,15.20,15.60,16.96,17.03,17.31,17.02,16.67,15.65,14.62,16.73],
+      Romania:  [11.22,10.71,10.13,10.29,10.13,10.02,9.43,9.16,9.05,8.93,8.61,8.16,7.50,7.56,7.90,8.15],
+    }
+  },
+  Theft: {
+    raw: {
+      Germany:  [2052913,1308687,1219983,1276065,1267576,1289071,1322144,1348955,1290481,1156422,1082478,1025321,931793,835368,1043887,1172337],
+      France:   [962583,1383325,1172553,1163793,1173885,1390001,1429398,1397363,1464569,1453593,1421318,1440130,1174223,1208310,1358091,1359102],
+      Italy:    [1498421,1403661,1352673,1350099,1290773,1145768,1036023,989293,946703,936064,956861,929310,697345,760003,841022,869445],
+      Greece:   [241087,271948,306397,297813,279027,259621,224406,213574,205085,196768,199524,191310,151540,163084,176980,190554],
+      Norway:   [150703,160063,151234,148128,155365,145940,132018,114828,104507,94179,92320,94544,86519,79133,99312,110995],
+      Lithuania:[82014,79893,72248,68042,62803,61451,57048,56286,57084,55042,52163,49842,43498,39271,44512,50001],
+      Romania:  [261543,248701,233456,221876,209765,198432,187643,178921,169854,161234,154321,147865,132456,128976,138543,145234],
+    },
+    rate: {
+      Germany:  [2496.92,1595.91,1491.38,1590.67,1578.00,1600.86,1636.98,1661.33,1570.39,1401.36,1307.46,1235.04,1120.39,1004.59,1254.11,1410.44],
+      France:   [1503.87,2149.68,1813.45,1791.04,1798.31,2118.89,2167.66,2101.67,2197.79,2181.31,2132.88,2143.76,1740.27,1784.05,1994.50,1990.56],
+      Italy:    [2530.94,2371.49,2281.81,2277.29,2169.87,1925.76,1743.87,1672.03,1575.43,1551.73,1576.78,1534.49,1175.52,1284.62,1428.40,1480.00],
+      Greece:   [2187.16,2468.98,2778.87,2703.90,2534.84,2395.98,2097.09,1999.76,1914.83,1841.33,1873.23,1789.98,1422.91,1531.56,1661.76,1808.00],
+      Norway:   [3138.22,3311.34,3120.74,3041.07,3177.96,2960.28,2662.22,2289.14,2053.77,1832.48,1777.86,1800.84,1633.19,1460.60,1823.36,2035.90],
+      Lithuania:[2436.14,2381.87,2167.17,2049.99,1907.20,1878.25,1759.51,1754.40,1797.31,1740.00,1663.78,1598.78,1400.58,1270.35,1451.63,1638.21],
+      Romania:  [1213.63,1158.01,1092.99,1040.65,985.33,934.21,884.56,844.77,806.33,765.43,733.47,704.19,636.71,622.05,673.72,709.54],
+    }
+  }
+};
+
+const COUNTRY_COORDS = {
+  Germany:   [10.4, 51.2],
+  France:    [2.3,  46.2],
+  Italy:     [12.6, 42.5],
+  Greece:    [22.0, 39.0],
+  Norway:    [10.8, 64.5],
+  Lithuania: [23.9, 55.9],
+  Romania:   [25.0, 45.9],
+};
+
+const ISO_IDS = {
+  Germany:   276,
+  France:    250,
+  Italy:     380,
+  Greece:    300,
+  Norway:    578,
+  Lithuania: 440,
+  Romania:   642,
+};
+
+const COUNTRY_NAMES = Object.keys(COUNTRY_COORDS);
+
+let category = 'Homicide';
+let measure = 'raw';
+let mapType = 'choropleth';
+let yearIdx = 15;
+let worldData = null;
+
+const svg = d3.select('#map-svg');
+const width = 680, height = 420;
+const projection = d3.geoNaturalEarth1()
+  .scale(900)
+  .center([15, 54])
+  .translate([width/2, height/2]);
+const path = d3.geoPath(projection);
+const tooltip = document.getElementById('tooltip');
+const mapWrap = document.getElementById('map-wrap');
+
+function getValue(country) {
+  const arr = DATA[category][measure][country];
+  return arr ? arr[yearIdx] : 0;
+}
+
+function getAllValues() {
+  return COUNTRY_NAMES.map(c => getValue(c));
+}
+
+const choroColors = ['#E6F1FB','#B5D4F4','#85B7EB','#378ADD','#185FA5','#0C447C'];
+const darkChoroColors = ['#042C53','#0C447C','#185FA5','#378ADD','#85B7EB','#B5D4F4'];
+
+function getColorScale() {
+  const vals = getAllValues();
+  const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const colors = isDark ? darkChoroColors : choroColors;
+  return d3.scaleQuantile().domain(vals).range(colors);
+}
+
+function formatVal(v) {
+  if (measure === 'rate') return v.toFixed(2);
+  return v.toLocaleString();
+}
+
+function showTooltip(event, country) {
+  const v = getValue(country);
+  const unit = measure === 'rate' ? ' per 100k' : ' offences';
+  tooltip.innerHTML = `
+    <div class="tt-country">${country}</div>
+    <div class="tt-row"><span>${category}</span><span class="tt-val">${formatVal(v)}${unit}</span></div>
+    <div class="tt-row"><span>Year</span><span class="tt-val">${YEARS[yearIdx]}</span></div>
+  `;
+  tooltip.style.display = 'block';
+  moveTooltip(event);
+}
+
+function moveTooltip(event) {
+  const rect = mapWrap.getBoundingClientRect();
+  const svgEl = document.getElementById('map-svg');
+  const svgRect = svgEl.getBoundingClientRect();
+  let x = event.clientX - svgRect.left + 12;
+  let y = event.clientY - svgRect.top + 12;
+  if (x + 180 > svgRect.width) x = x - 200;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top = y + 'px';
+}
+
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+function updateLegend() {
+  const leg = document.getElementById('legend');
+  if (mapType === 'bubble') {
+    leg.innerHTML = '<span>Bubble size = ' + (measure==='raw'?'raw count':'rate per 100k') + '</span>';
+    return;
+  }
+  const colorScale = getColorScale();
+  const vals = getAllValues().sort(d3.ascending);
+  const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const colors = isDark ? darkChoroColors : choroColors;
+  const quants = colorScale.quantiles();
+  let html = '<span style="margin-right:4px;">Low</span>';
+  colors.forEach((c,i) => {
+    html += `<span class="legend-swatch" style="background:${c}"></span>`;
+  });
+  html += '<span style="margin-left:4px;">High</span>';
+  html += `<span style="margin-left:12px;">${measure==='raw'?'Raw count':'Rate per 100k'}</span>`;
+  leg.innerHTML = html;
+}
+
+function drawMap() {
+  if (!worldData) return;
+  svg.selectAll('*').remove();
+
+  const isDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const colorScale = getColorScale();
+  const bgFill = isDark ? '#1a1a2e' : '#cde7f7';
+  const landFill = isDark ? '#2a2a3e' : '#e8e4dc';
+  const borderColor = isDark ? 'rgba(255,255,255,0.12)' : '#fff';
+
+  svg.append('rect').attr('width', width).attr('height', height).attr('fill', bgFill).attr('rx', 6);
+
+  const countries = topojson.feature(worldData, worldData.objects.countries);
+
+  svg.selectAll('.land')
+    .data(countries.features)
+    .join('path')
+    .attr('class','land')
+    .attr('d', path)
+    .attr('fill', d => {
+      const entry = Object.entries(ISO_IDS).find(([k,v]) => v === +d.id);
+      if (!entry) return landFill;
+      if (mapType === 'choropleth') return colorScale(getValue(entry[0]));
+      return isDark ? '#3a3a5e' : '#d4cfc5';
+    })
+    .attr('stroke', d => {
+      const entry = Object.entries(ISO_IDS).find(([k,v]) => v === +d.id);
+      return entry ? (isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)') : borderColor;
+    })
+    .attr('stroke-width', d => {
+      const entry = Object.entries(ISO_IDS).find(([k,v]) => v === +d.id);
+      return entry ? 1 : 0.3;
+    })
+    .attr('cursor', d => {
+      const entry = Object.entries(ISO_IDS).find(([k,v]) => v === +d.id);
+      return entry ? 'pointer' : 'default';
+    })
+    .on('mousemove', function(event, d) {
+      const entry = Object.entries(ISO_IDS).find(([k,v]) => v === +d.id);
+      if (entry) { showTooltip(event, entry[0]); d3.select(this).attr('opacity', 0.75); }
+    })
+    .on('mouseleave', function(event, d) {
+      hideTooltip();
+      d3.select(this).attr('opacity', 1);
+    });
+
+  if (mapType === 'bubble') {
+    const vals = getAllValues();
+    const maxVal = d3.max(vals);
+    const rScale = d3.scaleSqrt().domain([0, maxVal]).range([4, 36]);
+
+    COUNTRY_NAMES.forEach(country => {
+      const [lon, lat] = COUNTRY_COORDS[country];
+      const [cx, cy] = projection([lon, lat]);
+      const v = getValue(country);
+      svg.append('circle')
+        .attr('cx', cx).attr('cy', cy)
+        .attr('r', rScale(v))
+        .attr('fill', '#185FA5')
+        .attr('fill-opacity', 0.55)
+        .attr('stroke', '#0C447C')
+        .attr('stroke-width', 1.5)
+        .attr('cursor','pointer')
+        .on('mousemove', (event) => showTooltip(event, country))
+        .on('mouseleave', hideTooltip);
+
+      svg.append('text')
+        .attr('x', cx).attr('y', cy - rScale(v) - 4)
+        .attr('text-anchor','middle')
+        .attr('font-size', 10)
+        .attr('fill', isDark ? '#cde' : '#1B4F8A')
+        .attr('font-weight', 500)
+        .text(country.length > 9 ? country.slice(0,3) : country);
+    });
+  } else {
+    COUNTRY_NAMES.forEach(country => {
+      const [lon, lat] = COUNTRY_COORDS[country];
+      const [cx, cy] = projection([lon, lat]);
+      svg.append('text')
+        .attr('x', cx).attr('y', cy + 3)
+        .attr('text-anchor','middle')
+        .attr('font-size', 9)
+        .attr('fill', isDark ? '#fff' : '#0C447C')
+        .attr('font-weight', 500)
+        .attr('pointer-events','none')
+        .text(country.length > 9 ? country.slice(0,3) : country);
+    });
+  }
+
+  svg.append('text')
+    .attr('x', 8).attr('y', 18)
+    .attr('font-size', 11).attr('font-weight', 500)
+    .attr('fill', isDark ? '#ccc' : '#333')
+    .text(category + ' — ' + (measure==='raw' ? 'Raw count' : 'Rate per 100k') + ' — ' + YEARS[yearIdx]);
+
+  updateLegend();
+}
+
+function setCategory(cat, btn) {
+  category = cat;
+  document.querySelectorAll('.ctrl-bar button').forEach(b => {
+    if (['Homicide','Sexual Assault','Theft'].includes(b.textContent.trim()) ||
+        b.textContent.trim() === 'Sexual assault') {
+      b.classList.remove('active');
+    }
+  });
+  btn.classList.add('active');
+  drawMap();
+}
+
+function setMeasure(m, btn) {
+  measure = m;
+  document.getElementById('btn-raw').classList.toggle('active', m==='raw');
+  document.getElementById('btn-rate').classList.toggle('active', m==='rate');
+  drawMap();
+}
+
+function setMapType(t, btn) {
+  mapType = t;
+  document.getElementById('btn-choro').classList.toggle('active', t==='choropleth');
+  document.getElementById('btn-bubble').classList.toggle('active', t==='bubble');
+  drawMap();
+}
+
+document.getElementById('yr-slider').addEventListener('input', function() {
+  yearIdx = +this.value;
+  document.getElementById('yr-label').textContent = YEARS[yearIdx];
+  drawMap();
+});
+
+d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json').then(data => {
+  worldData = data;
+  drawMap();
+});
+</script>
